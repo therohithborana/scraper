@@ -41,6 +41,7 @@ SEARCH_IGNORED_DOMAINS = {
 COMMON_TLDS = (".com", ".in", ".co", ".net", ".org")
 DEFAULT_OUTPUT = "brands_with_websites.csv"
 DEFAULT_MISSING_OUTPUT = "brands_without_websites.csv"
+BATCH_SIZE = 100
 
 # Optional hardcoded paths.
 # If you set INPUT_CSV_PATH, the script will use it when no CLI input path is passed.
@@ -208,6 +209,16 @@ def write_rows(output_path: Path, rows: Iterable[Dict[str, str]], fieldnames: Se
         writer.writerows(rows)
 
 
+def initialize_output_file(output_path: Path, fieldnames: Sequence[str]) -> None:
+    write_rows(output_path, (), fieldnames)
+
+
+def append_rows(output_path: Path, rows: Iterable[Dict[str, str]], fieldnames: Sequence[str]) -> None:
+    with output_path.open("a", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=list(fieldnames))
+        writer.writerows(rows)
+
+
 def slice_rows(rows: List[Dict[str, str]], start_row: int, end_row: Optional[int]) -> List[Dict[str, str]]:
     if start_row < 1:
         raise ValueError("--start-row must be 1 or greater.")
@@ -224,11 +235,27 @@ def scrape_websites(
     brand_column: str,
     *,
     delay: float,
-) -> Tuple[List[Dict[str, str]], List[Dict[str, str]]]:
-    matched_rows: List[Dict[str, str]] = []
-    missing_rows: List[Dict[str, str]] = []
+    output_path: Path,
+    missing_output_path: Path,
+    batch_size: int = BATCH_SIZE,
+) -> Tuple[int, int]:
+    matched_batch: List[Dict[str, str]] = []
+    missing_batch: List[Dict[str, str]] = []
+    matched_count = 0
+    missing_count = 0
     cache: Dict[str, MatchResult] = {}
     misses = set()
+
+    def flush_batches() -> None:
+        nonlocal matched_count, missing_count
+        if matched_batch:
+            append_rows(output_path, matched_batch, ("brand", "website"))
+            matched_count += len(matched_batch)
+            matched_batch.clear()
+        if missing_batch:
+            append_rows(missing_output_path, missing_batch, ("brand",))
+            missing_count += len(missing_batch)
+            missing_batch.clear()
 
     for index, row in enumerate(rows, start=1):
         raw_brand = row.get(brand_column, "")
@@ -248,15 +275,18 @@ def scrape_websites(
                     misses.add(brand)
             if match:
                 website = match.website
-                matched_rows.append({"brand": brand, "website": website})
+                matched_batch.append({"brand": brand, "website": website})
             else:
-                missing_rows.append({"brand": brand})
+                missing_batch.append({"brand": brand})
 
         print(f"[{index}/{len(rows)}] {brand or '(blank)'} -> {website or 'not found'}", file=sys.stderr)
+        if index % batch_size == 0:
+            flush_batches()
         if delay > 0 and index != len(rows):
             time.sleep(delay)
 
-    return matched_rows, missing_rows
+    flush_batches()
+    return matched_count, missing_count
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -332,9 +362,15 @@ def main() -> int:
             rows_to_process = rows
         else:
             rows_to_process = slice_rows(rows, start_row, end_row)
-        matched_rows, missing_rows = scrape_websites(rows_to_process, brand_column, delay=args.delay)
-        write_rows(output_path, matched_rows, ("brand", "website"))
-        write_rows(missing_output_path, missing_rows, ("brand",))
+        initialize_output_file(output_path, ("brand", "website"))
+        initialize_output_file(missing_output_path, ("brand",))
+        matched_count, missing_count = scrape_websites(
+            rows_to_process,
+            brand_column,
+            delay=args.delay,
+            output_path=output_path,
+            missing_output_path=missing_output_path,
+        )
     except FileNotFoundError:
         print(f"Input CSV not found: {input_path}", file=sys.stderr)
         return 1
@@ -342,8 +378,8 @@ def main() -> int:
         print(str(error), file=sys.stderr)
         return 1
 
-    print(f"Saved matched results to {output_path}")
-    print(f"Saved missing results to {missing_output_path}")
+    print(f"Saved {matched_count} matched results to {output_path}")
+    print(f"Saved {missing_count} missing results to {missing_output_path}")
     return 0
 
 
