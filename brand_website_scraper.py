@@ -8,7 +8,7 @@ import sys
 import time
 import urllib.error
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass
@@ -323,7 +323,8 @@ def scrape_websites(
             missing_count += len(missing_batch)
             missing_batch.clear()
 
-    current_date = datetime.now().strftime("%Y-%m-%d")
+    ist = timezone(timedelta(hours=5, minutes=30))
+    current_date = datetime.now(ist).strftime("%Y-%m-%d")
     total = len(rows)
     if workers > 1:
         with ThreadPoolExecutor(max_workers=workers) as executor:

@@ -25,6 +25,6 @@ jobs:
           TOKEN: ${{ secrets.GOOGLE_TOKEN_PICKLE_B64 }}
       - name: Run scraper
         run: |
-          python3 brand_website_scraper.py --google-sheet-id "$SHEET_ID" --all-rows --workers 10 --delay 2
+          python3 brand_website_scraper.py --google-sheet-id "$SHEET_ID" --workers 10
         env:
           SHEET_ID: ${{ secrets.GOOGLE_SHEET_ID }}
