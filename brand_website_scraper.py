@@ -7,6 +7,7 @@ import re
 import sys
 import time
 import urllib.error
+from datetime import datetime
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass
@@ -41,17 +42,17 @@ SEARCH_IGNORED_DOMAINS = {
 COMMON_TLDS = (".com", ".in", ".co", ".net", ".org")
 DEFAULT_OUTPUT = "brands_with_websites.csv"
 DEFAULT_MISSING_OUTPUT = "brands_without_websites.csv"
-BATCH_SIZE = 100
+BATCH_SIZE = 5
 
 # Optional hardcoded paths.
 # If you set INPUT_CSV_PATH, the script will use it when no CLI input path is passed.
 # Example:
 # INPUT_CSV_PATH = "/Users/rohithborana/Desktop/brands.csv"
 # OUTPUT_CSV_PATH = "/Users/rohithborana/Desktop/output.csv"
-INPUT_CSV_PATH = "/Users/rohithborana/stuf/scraper/brand_names.csv"
+INPUT_CSV_PATH = "/Users/rohithborana/stuf/scraper/brands-showed-up (1).csv"
 OUTPUT_CSV_PATH = ""
-START_ROW = 1
-END_ROW = 5
+START_ROW = 94167
+END_ROW = 160934
 
 
 @dataclass
@@ -249,14 +250,15 @@ def scrape_websites(
     def flush_batches() -> None:
         nonlocal matched_count, missing_count
         if matched_batch:
-            append_rows(output_path, matched_batch, ("brand", "website"))
+            append_rows(output_path, matched_batch, ("brand", "website", "date"))
             matched_count += len(matched_batch)
             matched_batch.clear()
         if missing_batch:
-            append_rows(missing_output_path, missing_batch, ("brand",))
+            append_rows(missing_output_path, missing_batch, ("brand", "date"))
             missing_count += len(missing_batch)
             missing_batch.clear()
 
+    current_date = datetime.now().strftime("%Y-%m-%d")
     for index, row in enumerate(rows, start=1):
         raw_brand = row.get(brand_column, "")
         brand = normalize_brand(raw_brand)
@@ -275,9 +277,9 @@ def scrape_websites(
                     misses.add(brand)
             if match:
                 website = match.website
-                matched_batch.append({"brand": brand, "website": website})
+                matched_batch.append({"brand": brand, "website": website, "date": current_date})
             else:
-                missing_batch.append({"brand": brand})
+                missing_batch.append({"brand": brand, "date": current_date})
 
         print(f"[{index}/{len(rows)}] {brand or '(blank)'} -> {website or 'not found'}", file=sys.stderr)
         if index % batch_size == 0:
@@ -362,8 +364,8 @@ def main() -> int:
             rows_to_process = rows
         else:
             rows_to_process = slice_rows(rows, start_row, end_row)
-        initialize_output_file(output_path, ("brand", "website"))
-        initialize_output_file(missing_output_path, ("brand",))
+        initialize_output_file(output_path, ("brand", "website", "date"))
+        initialize_output_file(missing_output_path, ("brand", "date"))
         matched_count, missing_count = scrape_websites(
             rows_to_process,
             brand_column,
