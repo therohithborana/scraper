@@ -63,7 +63,7 @@ BATCH_SIZE = 20
 # Example:
 # INPUT_CSV_PATH = "/Users/rohithborana/Desktop/brands.csv"
 # OUTPUT_CSV_PATH = "/Users/rohithborana/Desktop/output.csv"
-INPUT_CSV_PATH = "/Users/rohithborana/stuf/scraper/brands-showed-up (1).csv"
+INPUT_CSV_PATH = "brands-showed-up (1).csv"
 OUTPUT_CSV_PATH = ""
 START_ROW = 97283
 END_ROW = 160934
