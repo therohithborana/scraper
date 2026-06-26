@@ -7,11 +7,13 @@ import re
 import sys
 import time
 import urllib.error
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
+from threading import Lock
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
 try:
@@ -54,7 +56,7 @@ SEARCH_IGNORED_DOMAINS = {
 COMMON_TLDS = (".com", ".in", ".co", ".net", ".org")
 DEFAULT_OUTPUT = "brands_with_websites.csv"
 DEFAULT_MISSING_OUTPUT = "brands_without_websites.csv"
-BATCH_SIZE = 5
+BATCH_SIZE = 20
 
 # Optional hardcoded paths.
 # If you set INPUT_CSV_PATH, the script will use it when no CLI input path is passed.
@@ -63,7 +65,7 @@ BATCH_SIZE = 5
 # OUTPUT_CSV_PATH = "/Users/rohithborana/Desktop/output.csv"
 INPUT_CSV_PATH = "/Users/rohithborana/stuf/scraper/brands-showed-up (1).csv"
 OUTPUT_CSV_PATH = ""
-START_ROW = 96432
+START_ROW = 96763
 END_ROW = 160934
 
 
@@ -278,6 +280,15 @@ def slice_rows(rows: List[Dict[str, str]], start_row: int, end_row: Optional[int
     return rows[start_index:end_index]
 
 
+def _lookup_brand(brand: str) -> Tuple[str, Optional[MatchResult]]:
+    if not brand:
+        return brand, None
+    match = guess_direct_website(brand)
+    if not match:
+        match = search_official_website(brand)
+    return brand, match
+
+
 def scrape_websites(
     rows: List[Dict[str, str]],
     brand_column: str,
@@ -287,13 +298,15 @@ def scrape_websites(
     missing_output_path: Path,
     sheet_id: str = "",
     batch_size: int = BATCH_SIZE,
+    workers: int = 1,
 ) -> Tuple[int, int]:
     matched_batch: List[Dict[str, str]] = []
     missing_batch: List[Dict[str, str]] = []
     matched_count = 0
     missing_count = 0
     cache: Dict[str, MatchResult] = {}
-    misses = set()
+    misses: set = set()
+    cache_lock = Lock()
 
     def flush_batches() -> None:
         nonlocal matched_count, missing_count
@@ -311,35 +324,60 @@ def scrape_websites(
             missing_batch.clear()
 
     current_date = datetime.now().strftime("%Y-%m-%d")
-    for index, row in enumerate(rows, start=1):
-        raw_brand = row.get(brand_column, "")
-        brand = normalize_brand(raw_brand)
-        website = ""
-        if brand:
-            match = cache.get(brand)
-            if brand in misses:
-                match = None
-            if match is None and brand not in misses:
-                match = guess_direct_website(brand)
-                if not match:
-                    match = search_official_website(brand)
-                if match:
-                    cache[brand] = match
-                else:
-                    misses.add(brand)
-            if match:
-                website = match.website
-                matched_batch.append({"brand": brand, "website": website, "date": current_date})
-            else:
-                missing_batch.append({"brand": brand, "date": current_date})
+    total = len(rows)
+    if workers > 1:
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            brands = [
+                normalize_brand(row.get(brand_column, ""))
+                for row in rows
+            ]
+            futures = {executor.submit(_lookup_brand, b): i for i, b in enumerate(brands, start=1)}
+            results: Dict[int, Tuple[str, Optional[MatchResult]]] = {}
+            next_idx = 1
 
-        print(f"[{index}/{len(rows)}] {brand or '(blank)'} -> {website or 'not found'}", file=sys.stderr)
-        if index % batch_size == 0:
+            for future in as_completed(futures):
+                idx = futures[future]
+                results[idx] = future.result()
+                while next_idx in results:
+                    brand, match = results.pop(next_idx)
+                    website = match.website if match else ""
+                    if match:
+                        matched_batch.append({"brand": brand, "website": website, "date": current_date})
+                    else:
+                        missing_batch.append({"brand": brand, "date": current_date})
+                    print(f"[{next_idx}/{total}] {brand or '(blank)'} -> {website or 'not found'}", file=sys.stderr)
+                    if next_idx % batch_size == 0:
+                        flush_batches()
+                    next_idx += 1
+                    if delay > 0:
+                        time.sleep(delay)
             flush_batches()
-        if delay > 0 and index != len(rows):
-            time.sleep(delay)
+    else:
+        for index, row in enumerate(rows, start=1):
+            raw_brand = row.get(brand_column, "")
+            brand = normalize_brand(raw_brand)
+            website = ""
+            if brand:
+                match = cache.get(brand) if brand not in misses else None
+                if match is None:
+                    _brand, match = _lookup_brand(brand)
+                    if match:
+                        cache[brand] = match
+                    else:
+                        misses.add(brand)
+                if match:
+                    website = match.website
+                    matched_batch.append({"brand": brand, "website": website, "date": current_date})
+                else:
+                    missing_batch.append({"brand": brand, "date": current_date})
 
-    flush_batches()
+            print(f"[{index}/{total}] {brand or '(blank)'} -> {website or 'not found'}", file=sys.stderr)
+            if index % batch_size == 0:
+                flush_batches()
+            if delay > 0 and index != total:
+                time.sleep(delay)
+
+        flush_batches()
     return matched_count, missing_count
 
 
@@ -387,7 +425,13 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--google-sheet-id",
         default="",
-        help="Google Sheet ID to append results to (requires service-account.json in CWD)",
+        help="Google Sheet ID to append results to (requires credentials.json in CWD)",
+    )
+    parser.add_argument(
+        "--workers",
+        type=int,
+        default=1,
+        help="Number of parallel workers (default: 1, sequential). Set to 5-10 for speed.",
     )
     return parser
 
@@ -430,6 +474,7 @@ def main() -> int:
             output_path=output_path,
             missing_output_path=missing_output_path,
             sheet_id=args.google_sheet_id,
+            workers=args.workers,
         )
     except FileNotFoundError:
         print(f"Input CSV not found: {input_path}", file=sys.stderr)
