@@ -1,0 +1,30 @@
+name: Scrape Brands
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 6 * * *'
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Install dependencies
+        run: |
+          pip install google-api-python-client google-auth google-auth-oauthlib
+      - name: Setup credentials
+        run: |
+          echo "$CREDENTIALS" > credentials.json
+          echo "$TOKEN" | base64 -d > token.pickle
+        env:
+          CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS_JSON }}
+          TOKEN: ${{ secrets.GOOGLE_TOKEN_PICKLE_B64 }}
+      - name: Run scraper
+        run: |
+          python3 brand_website_scraper.py --google-sheet-id "$SHEET_ID" --all-rows --workers 10 --delay 2
+        env:
+          SHEET_ID: ${{ secrets.GOOGLE_SHEET_ID }}
