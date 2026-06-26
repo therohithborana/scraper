@@ -14,6 +14,18 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
+try:
+    import pickle
+
+    from google.auth.transport.requests import Request
+    from google.oauth2.credentials import Credentials
+    from google_auth_oauthlib.flow import InstalledAppFlow
+    from googleapiclient.discovery import build
+
+    GOOGLE_SHEETS_AVAILABLE = True
+except ImportError:
+    GOOGLE_SHEETS_AVAILABLE = False
+
 
 USER_AGENT = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
@@ -51,7 +63,7 @@ BATCH_SIZE = 5
 # OUTPUT_CSV_PATH = "/Users/rohithborana/Desktop/output.csv"
 INPUT_CSV_PATH = "/Users/rohithborana/stuf/scraper/brands-showed-up (1).csv"
 OUTPUT_CSV_PATH = ""
-START_ROW = 94167
+START_ROW = 96432
 END_ROW = 160934
 
 
@@ -203,6 +215,41 @@ def read_rows(csv_path: Path) -> Tuple[List[Dict[str, str]], List[str]]:
         return rows, list(reader.fieldnames)
 
 
+SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
+TOKEN_FILE = "token.pickle"
+
+
+def get_sheets_service():
+    creds = None
+    token_path = Path(TOKEN_FILE)
+    if token_path.exists():
+        with open(TOKEN_FILE, "rb") as f:
+            creds = pickle.load(f)
+    if not creds or not creds.valid:
+        if creds and creds.expired and creds.refresh_token:
+            creds.refresh(Request())
+        else:
+            flow = InstalledAppFlow.from_client_secrets_file("credentials.json", SCOPES)
+            creds = flow.run_local_server(port=0)
+        with open(TOKEN_FILE, "wb") as f:
+            pickle.dump(creds, f)
+    return build("sheets", "v4", credentials=creds, cache_discovery=False)
+
+
+def append_to_sheet(sheet_id: str, range_name: str, values: List[List[str]]) -> None:
+    if not GOOGLE_SHEETS_AVAILABLE:
+        print("Install: pip install google-api-python-client google-auth google-auth-oauthlib", file=sys.stderr)
+        return
+    service = get_sheets_service()
+    service.spreadsheets().values().append(
+        spreadsheetId=sheet_id,
+        range=range_name,
+        valueInputOption="USER_ENTERED",
+        insertDataOption="INSERT_ROWS",
+        body={"values": values},
+    ).execute()
+
+
 def write_rows(output_path: Path, rows: Iterable[Dict[str, str]], fieldnames: Sequence[str]) -> None:
     with output_path.open("w", newline="", encoding="utf-8") as handle:
         writer = csv.DictWriter(handle, fieldnames=list(fieldnames))
@@ -238,6 +285,7 @@ def scrape_websites(
     delay: float,
     output_path: Path,
     missing_output_path: Path,
+    sheet_id: str = "",
     batch_size: int = BATCH_SIZE,
 ) -> Tuple[int, int]:
     matched_batch: List[Dict[str, str]] = []
@@ -251,10 +299,14 @@ def scrape_websites(
         nonlocal matched_count, missing_count
         if matched_batch:
             append_rows(output_path, matched_batch, ("brand", "website", "date"))
+            if sheet_id:
+                append_to_sheet(sheet_id, "Brands with websites!A:C", [[r["brand"], r["website"], r["date"]] for r in matched_batch])
             matched_count += len(matched_batch)
             matched_batch.clear()
         if missing_batch:
             append_rows(missing_output_path, missing_batch, ("brand", "date"))
+            if sheet_id:
+                append_to_sheet(sheet_id, "Brands without websites!A:B", [[r["brand"], r["date"]] for r in missing_batch])
             missing_count += len(missing_batch)
             missing_batch.clear()
 
@@ -332,6 +384,11 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Process all rows in the CSV and ignore START_ROW, END_ROW, --start-row, and --end-row.",
     )
+    parser.add_argument(
+        "--google-sheet-id",
+        default="",
+        help="Google Sheet ID to append results to (requires service-account.json in CWD)",
+    )
     return parser
 
 
@@ -372,6 +429,7 @@ def main() -> int:
             delay=args.delay,
             output_path=output_path,
             missing_output_path=missing_output_path,
+            sheet_id=args.google_sheet_id,
         )
     except FileNotFoundError:
         print(f"Input CSV not found: {input_path}", file=sys.stderr)
