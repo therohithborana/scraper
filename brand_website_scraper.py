@@ -65,7 +65,7 @@ BATCH_SIZE = 20
 # OUTPUT_CSV_PATH = "/Users/rohithborana/Desktop/output.csv"
 INPUT_CSV_PATH = "brands-showed-up (1).csv"
 OUTPUT_CSV_PATH = ""
-START_ROW = 97283
+START_ROW = 116023
 END_ROW = 160934
 
 
