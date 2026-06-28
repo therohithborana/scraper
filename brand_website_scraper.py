@@ -16,6 +16,8 @@ from pathlib import Path
 from threading import Lock
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
+MAX_RETRIES = 5
+
 try:
     import pickle
 
@@ -243,13 +245,24 @@ def append_to_sheet(sheet_id: str, range_name: str, values: List[List[str]]) -> 
         print("Install: pip install google-api-python-client google-auth google-auth-oauthlib", file=sys.stderr)
         return
     service = get_sheets_service()
-    service.spreadsheets().values().append(
-        spreadsheetId=sheet_id,
-        range=range_name,
-        valueInputOption="USER_ENTERED",
-        insertDataOption="INSERT_ROWS",
-        body={"values": values},
-    ).execute()
+    for attempt in range(MAX_RETRIES):
+        try:
+            service.spreadsheets().values().append(
+                spreadsheetId=sheet_id,
+                range=range_name,
+                valueInputOption="USER_ENTERED",
+                insertDataOption="INSERT_ROWS",
+                body={"values": values},
+            ).execute()
+            return
+        except Exception as e:
+            if attempt < MAX_RETRIES - 1:
+                wait = 2 ** attempt
+                print(f"[retry {attempt + 1}/{MAX_RETRIES}] Sheets API error: {e}. Waiting {wait}s...", file=sys.stderr)
+                time.sleep(wait)
+            else:
+                print(f"Sheets API failed after {MAX_RETRIES} attempts: {e}", file=sys.stderr)
+                raise
 
 
 def write_rows(output_path: Path, rows: Iterable[Dict[str, str]], fieldnames: Sequence[str]) -> None:
